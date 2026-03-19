@@ -59,6 +59,17 @@ class CourseResponse(BaseModel):
     created_at: str
 
 
+class MaterialResponse(BaseModel):
+    id: int
+    course_id: int
+    original_name: str
+    file_size: int
+    char_count: int
+    status: str
+    error_message: str
+    created_at: str
+
+
 # --- Question Schemas ---
 class QuestionSchema(BaseModel):
     question_text: str

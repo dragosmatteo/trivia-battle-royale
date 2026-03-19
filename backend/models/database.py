@@ -52,6 +52,20 @@ async def init_db():
             FOREIGN KEY (course_id) REFERENCES courses(id)
         );
 
+        CREATE TABLE IF NOT EXISTS course_materials (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            course_id INTEGER NOT NULL,
+            filename TEXT NOT NULL,
+            original_name TEXT NOT NULL,
+            file_size INTEGER DEFAULT 0,
+            extracted_text TEXT,
+            char_count INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'processing' CHECK(status IN ('processing', 'ready', 'error')),
+            error_message TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (course_id) REFERENCES courses(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS game_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             pin_code TEXT UNIQUE NOT NULL,
