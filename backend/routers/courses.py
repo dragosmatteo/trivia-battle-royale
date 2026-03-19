@@ -2,7 +2,7 @@ import os
 import json
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from models.database import get_db
-from models.schemas import CourseResponse, GenerateRequest, QuestionResponse
+from models.schemas import CourseResponse, GenerateRequest, QuestionResponse, QuestionSchema
 from routers.auth import get_current_user
 from services.pdf_processor import extract_text_from_pdf
 from services.ai_generator import generate_questions_ai
@@ -143,6 +143,60 @@ async def get_questions(course_id: int, difficulty: str | None = None, user: dic
         )
         for r in rows
     ]
+
+
+@router.post("/{course_id}/questions", response_model=QuestionResponse)
+async def create_question_manual(course_id: int, q: QuestionSchema, user: dict = Depends(get_current_user)):
+    """Create a question manually (professor types it)."""
+    if user["role"] != "professor":
+        raise HTTPException(status_code=403, detail="Doar profesorii pot adăuga întrebări")
+
+    db = await get_db()
+    # Verify course belongs to professor
+    cursor = await db.execute("SELECT id FROM courses WHERE id = ? AND professor_id = ?", (course_id, user["id"]))
+    if not await cursor.fetchone():
+        await db.close()
+        raise HTTPException(status_code=404, detail="Cursul nu a fost găsit")
+
+    cursor = await db.execute(
+        "INSERT INTO questions (course_id, question_text, options, correct_index, explanation, difficulty) VALUES (?, ?, ?, ?, ?, ?)",
+        (course_id, q.question_text, json.dumps(q.options), q.correct_index, q.explanation, q.difficulty.value),
+    )
+    await db.commit()
+    q_id = cursor.lastrowid
+    await db.close()
+
+    return QuestionResponse(
+        id=q_id, course_id=course_id, question_text=q.question_text,
+        options=q.options, correct_index=q.correct_index,
+        explanation=q.explanation, difficulty=q.difficulty.value,
+    )
+
+
+@router.put("/{course_id}/questions/{question_id}", response_model=QuestionResponse)
+async def update_question(course_id: int, question_id: int, q: QuestionSchema, user: dict = Depends(get_current_user)):
+    """Edit an existing question."""
+    if user["role"] != "professor":
+        raise HTTPException(status_code=403, detail="Doar profesorii pot edita întrebări")
+
+    db = await get_db()
+    cursor = await db.execute("SELECT id FROM questions WHERE id = ? AND course_id = ?", (question_id, course_id))
+    if not await cursor.fetchone():
+        await db.close()
+        raise HTTPException(status_code=404, detail="Întrebarea nu a fost găsită")
+
+    await db.execute(
+        "UPDATE questions SET question_text = ?, options = ?, correct_index = ?, explanation = ?, difficulty = ? WHERE id = ?",
+        (q.question_text, json.dumps(q.options), q.correct_index, q.explanation, q.difficulty.value, question_id),
+    )
+    await db.commit()
+    await db.close()
+
+    return QuestionResponse(
+        id=question_id, course_id=course_id, question_text=q.question_text,
+        options=q.options, correct_index=q.correct_index,
+        explanation=q.explanation, difficulty=q.difficulty.value,
+    )
 
 
 @router.delete("/{course_id}/questions/{question_id}")

@@ -6,23 +6,26 @@ from services.pdf_processor import chunk_text
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-SYSTEM_PROMPT = """You are an expert educational quiz generator. Given a text excerpt from a university course, generate multiple-choice questions.
+SYSTEM_PROMPT = """Ești un expert în generarea de quiz-uri educaționale universitare. Primești un extras din materialul de curs și generezi întrebări cu răspunsuri multiple.
 
-RULES:
-1. Each question MUST be answerable from the provided text.
-2. Each question has exactly 4 answer options (A, B, C, D).
-3. Exactly ONE option is correct.
-4. The explanation must reference the source text.
-5. Difficulty levels: "easy" (factual recall), "medium" (understanding), "hard" (analysis/application).
+REGULI STRICTE:
+1. Fiecare întrebare TREBUIE să fie responsabilă din textul furnizat.
+2. Fiecare întrebare are exact 4 opțiuni de răspuns (A, B, C, D).
+3. Exact UNA dintre opțiuni este corectă.
+4. Explicația trebuie să facă referire la textul sursă.
+5. Niveluri de dificultate: "easy" (reamintire factuală), "medium" (înțelegere), "hard" (analiză/aplicare).
+6. TOATE întrebările și răspunsurile TREBUIE să fie în LIMBA ROMÂNĂ.
+7. Opțiunile greșite trebuie să fie plauzibile dar clar incorecte.
+8. Nu repeta întrebări similare.
 
-Return ONLY valid JSON in this exact format:
+Returnează DOAR JSON valid în acest format exact:
 {
   "questions": [
     {
-      "question_text": "The question text here?",
-      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "question_text": "Textul întrebării aici?",
+      "options": ["Opțiunea A", "Opțiunea B", "Opțiunea C", "Opțiunea D"],
       "correct_index": 0,
-      "explanation": "Explanation why this is correct based on the course material.",
+      "explanation": "Explicația de ce acest răspuns este corect, bazat pe materialul de curs.",
       "difficulty": "medium"
     }
   ]
