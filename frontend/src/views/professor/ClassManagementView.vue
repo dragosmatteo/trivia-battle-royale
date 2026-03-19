@@ -154,13 +154,25 @@
                 </span>
               </td>
               <td>
-                <button
-                  class="btn btn-danger"
-                  style="font-size: 11px; padding: 4px 10px;"
-                  @click="removeStudent(s.id, s.full_name)"
-                >
-                  Elimina
-                </button>
+                <div style="display: flex; gap: 4px; align-items: center; flex-wrap: wrap;">
+                  <select
+                    class="form-select"
+                    style="font-size: 11px; padding: 3px 6px; min-width: 90px;"
+                    @change="moveStudent(s.id, s.full_name, $event.target.value); $event.target.value = ''"
+                  >
+                    <option value="">Mută în...</option>
+                    <option v-for="cls in classes.filter(c => c.group_name !== selectedClass)" :key="cls.group_name" :value="cls.group_name">
+                      {{ cls.group_name }}
+                    </option>
+                  </select>
+                  <button
+                    class="btn btn-danger"
+                    style="font-size: 11px; padding: 4px 10px;"
+                    @click="removeStudent(s.id, s.full_name)"
+                  >
+                    Elimina
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
@@ -253,6 +265,18 @@ async function addStudent() {
     addStudentError.value = true
   } finally {
     addingStudent.value = false
+  }
+}
+
+async function moveStudent(userId, name, newGroup) {
+  if (!newGroup) return
+  if (!confirm(`Muți studentul "${name}" din ${selectedClass.value} în ${newGroup}?`)) return
+  try {
+    await api.put(`/admin/classes/${encodeURIComponent(selectedClass.value)}/students/${userId}/move`, { new_group: newGroup })
+    await selectClass(selectedClass.value)
+    await loadClasses()
+  } catch (e) {
+    alert('Eroare: ' + (e.response?.data?.detail || 'Nu s-a putut muta studentul'))
   }
 }
 

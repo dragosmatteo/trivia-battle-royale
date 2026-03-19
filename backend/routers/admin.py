@@ -403,6 +403,44 @@ async def add_student_to_class(
     }
 
 
+class MoveStudentRequest(BaseModel):
+    new_group: str = Field(..., min_length=1, max_length=50)
+
+
+@router.put("/classes/{group_name}/students/{user_id}/move")
+async def move_student_to_class(
+    group_name: str,
+    user_id: int,
+    data: MoveStudentRequest,
+    user: dict = Depends(get_current_user),
+):
+    """Move a student from one class to another."""
+    _require_professor(user)
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, group_name FROM users WHERE id = ? AND role = 'student'",
+        (user_id,),
+    )
+    student = await cursor.fetchone()
+    if not student:
+        await db.close()
+        raise HTTPException(status_code=404, detail="Studentul nu a fost găsit")
+
+    if student["group_name"] != group_name:
+        await db.close()
+        raise HTTPException(status_code=400, detail="Studentul nu aparține acestei clase")
+
+    await db.execute(
+        "UPDATE users SET group_name = ? WHERE id = ?",
+        (data.new_group, user_id),
+    )
+    await db.commit()
+    await db.close()
+
+    return {"message": f"Studentul a fost mutat în clasa {data.new_group}"}
+
+
 @router.delete("/classes/{group_name}/students/{user_id}")
 async def remove_student_from_class(
     group_name: str,
