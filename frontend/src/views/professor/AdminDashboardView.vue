@@ -119,6 +119,9 @@
           <button class="btn btn-success" style="font-size: 12px; padding: 6px 12px;" @click.stop="createSession(course.id)">
             Porneste joc
           </button>
+          <button class="btn btn-danger" style="font-size: 12px; padding: 6px 12px;" @click.stop="deleteCourse(course.id, course.title)">
+            Sterge
+          </button>
         </div>
       </div>
     </div>
@@ -180,6 +183,17 @@ async function uploadCourse() {
     uploadMsg.value = 'Eroare: ' + (e.response?.data?.detail || 'Nu s-a putut incarca')
   } finally {
     uploading.value = false
+  }
+}
+
+async function deleteCourse(courseId, title) {
+  if (!confirm(`Sigur vrei să ștergi cursul "${title}"?\n\nAceastă acțiune va șterge toate întrebările, materialele și sesiunile asociate.`)) return
+  try {
+    await api.delete(`/courses/${courseId}`)
+    courses.value = courses.value.filter(c => c.id !== courseId)
+    stats.value.total_courses = Math.max(0, stats.value.total_courses - 1)
+  } catch (e) {
+    alert(e.response?.data?.detail || 'Eroare la ștergerea cursului')
   }
 }
 

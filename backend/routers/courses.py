@@ -97,6 +97,46 @@ async def list_courses(user: dict = Depends(get_current_user)):
     ]
 
 
+@router.delete("/{course_id}")
+async def delete_course(course_id: int, user: dict = Depends(get_current_user)):
+    """Delete a course and all its questions, materials, and game sessions."""
+    if user["role"] != "professor":
+        raise HTTPException(status_code=403, detail="Doar profesorii pot șterge cursuri")
+
+    db = await get_db()
+
+    # Verify course belongs to professor
+    cursor = await db.execute("SELECT id FROM courses WHERE id = ? AND professor_id = ?", (course_id, user["id"]))
+    if not await cursor.fetchone():
+        await db.close()
+        raise HTTPException(status_code=404, detail="Cursul nu a fost găsit")
+
+    # Delete related data
+    await db.execute("DELETE FROM questions WHERE course_id = ?", (course_id,))
+    await db.execute("DELETE FROM course_materials WHERE course_id = ?", (course_id,))
+
+    # Delete game results for sessions of this course
+    cursor = await db.execute("SELECT id FROM game_sessions WHERE course_id = ?", (course_id,))
+    session_ids = [r["id"] for r in await cursor.fetchall()]
+    for sid in session_ids:
+        await db.execute("DELETE FROM game_results WHERE session_id = ?", (sid,))
+    await db.execute("DELETE FROM game_sessions WHERE course_id = ?", (course_id,))
+
+    # Delete course itself
+    await db.execute("DELETE FROM courses WHERE id = ?", (course_id,))
+
+    # Delete uploaded files
+    cursor = await db.execute("SELECT filename FROM course_materials WHERE course_id = ?", (course_id,))
+    for r in await cursor.fetchall():
+        filepath = os.path.join(UPLOAD_DIR, r["filename"])
+        if os.path.exists(filepath):
+            os.remove(filepath)
+
+    await db.commit()
+    await db.close()
+    return {"message": "Cursul a fost șters complet"}
+
+
 # ──────────────────── Materials (Knowledge Base) ────────────────────
 
 @router.get("/{course_id}/materials", response_model=list[MaterialResponse])
