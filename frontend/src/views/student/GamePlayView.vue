@@ -43,6 +43,16 @@
       <p style="color: var(--text-secondary); margin-top: 8px;">Pregătește-te...</p>
     </div>
 
+    <!-- Tier Assignment Notification -->
+    <div v-if="tierNotification" class="overlay" style="z-index: 999;" @click="tierNotification = ''">
+      <div class="overlay-content">
+        <div style="font-size: 64px; margin-bottom: 16px;">{{ tierIcon }}</div>
+        <h2 style="font-weight: 800; color: var(--accent);">{{ tierLabel }}</h2>
+        <p style="color: var(--text-secondary); margin-top: 8px;">{{ tierNotification }}</p>
+        <p style="color: var(--text-muted); margin-top: 16px; font-size: 13px;">Click pentru a continua</p>
+      </div>
+    </div>
+
     <!-- Active Question -->
     <div v-else-if="gameStore.status === 'round_active'" class="fade-in">
       <!-- Spectator banner -->
@@ -53,12 +63,15 @@
 
       <!-- Question header -->
       <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-        <div style="display: flex; align-items: center; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span style="font-weight: 800; font-size: 14px; color: var(--text-muted);">
             {{ gameStore.questionIndex + 1 }} / {{ gameStore.totalQuestions }}
           </span>
           <span :class="['badge', `badge-${gameStore.currentQuestion.difficulty}`]">
             {{ gameStore.currentQuestion.difficulty }}
+          </span>
+          <span v-if="gameStore.currentQuestion.phase" class="badge" style="background: rgba(108,92,231,0.2); color: var(--accent);">
+            {{ gameStore.currentQuestion.phase }}
           </span>
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
@@ -70,6 +83,13 @@
       <!-- Timer bar -->
       <div class="timer-bar">
         <div class="timer-bar-fill" :class="timerClass" :style="{ width: timerPercent + '%' }"></div>
+      </div>
+
+      <!-- Your tier badge -->
+      <div v-if="gameStore.currentQuestion.your_tier" style="margin-bottom: 12px; text-align: center;">
+        <span class="badge" :style="gameStore.currentQuestion.your_tier === 'advanced' ? { background: 'rgba(255,215,0,0.15)', color: 'var(--gold)' } : { background: 'rgba(0,206,201,0.15)', color: 'var(--success)' }">
+          {{ gameStore.currentQuestion.your_tier === 'advanced' ? 'Arena Avansata' : 'Arena Standard' }}
+        </span>
       </div>
 
       <!-- Question text -->
@@ -120,9 +140,9 @@
         </div>
       </div>
 
-      <!-- Result card -->
-      <div class="card" style="margin-bottom: 20px; text-align: center;">
-        <div v-if="gameStore.myResult?.status === 'correct'" style="margin-bottom: 16px;">
+      <!-- Your result -->
+      <div class="card" style="margin-bottom: 16px; text-align: center;">
+        <div v-if="gameStore.myResult?.status === 'correct'" style="margin-bottom: 12px;">
           <div style="font-size: 48px;">&#10004;&#65039;</div>
           <h3 style="color: var(--success); font-weight: 800;">Corect!</h3>
           <p style="color: var(--accent); font-weight: 700; font-size: 20px;">+{{ gameStore.myResult.points_earned }} puncte</p>
@@ -130,37 +150,73 @@
             &#128293; Serie de {{ gameStore.myResult.streak }}! (+50 bonus)
           </p>
         </div>
-        <div v-else-if="gameStore.myResult?.status === 'wrong'" style="margin-bottom: 16px;">
+        <div v-else-if="gameStore.myResult?.status === 'wrong'" style="margin-bottom: 12px;">
           <div style="font-size: 48px;">&#10060;</div>
           <h3 style="color: var(--danger); font-weight: 800;">Greșit!</h3>
         </div>
-        <div v-else-if="gameStore.isSpectator" style="margin-bottom: 16px;">
+        <div v-else-if="gameStore.isSpectator" style="margin-bottom: 12px;">
           <div style="font-size: 48px;">&#128064;</div>
           <h3 style="font-weight: 800;">Spectator</h3>
         </div>
 
-        <div v-if="gameStore.roundResult?.is_sudden_death" style="margin-bottom: 12px;">
-          <span class="badge badge-hard" style="animation: pulse 1s infinite;">SUDDEN DEATH</span>
+        <!-- Your stats -->
+        <div style="display: flex; justify-content: center; gap: 24px; margin-top: 12px; font-size: 13px; color: var(--text-secondary);">
+          <div><strong style="color: var(--accent);">{{ gameStore.roundResult?.your_score || 0 }}</strong> puncte</div>
+          <div><strong style="color: var(--success);">{{ gameStore.roundResult?.your_accuracy || 0 }}%</strong> acuratețe</div>
+          <div>Serie: <strong style="color: var(--gold);">{{ gameStore.roundResult?.your_streak || 0 }}</strong></div>
         </div>
 
-        <!-- Show correct answer -->
-        <div style="text-align: left; margin-top: 16px;">
-          <div v-for="(opt, i) in gameStore.currentQuestion?.options" :key="i"
+        <div v-if="gameStore.roundResult?.is_sudden_death" style="margin-top: 12px;">
+          <span class="badge badge-hard" style="animation: pulse 1s infinite;">SUDDEN DEATH</span>
+        </div>
+      </div>
+
+      <!-- Correct Answer Card -->
+      <div class="card" style="margin-bottom: 16px; border-color: var(--success);">
+        <h4 style="font-weight: 700; margin-bottom: 12px; color: var(--success);">&#10003; Răspunsul corect</h4>
+        <div style="display: grid; gap: 8px;">
+          <div v-for="(opt, i) in (gameStore.roundResult?.options || gameStore.currentQuestion?.options || [])" :key="i"
             :class="['option-btn', i === gameStore.roundResult?.correct_index ? 'correct' : (i === gameStore.selectedAnswer && i !== gameStore.roundResult?.correct_index ? 'wrong' : '')]"
-            style="margin-bottom: 8px; cursor: default;">
+            style="cursor: default; margin-bottom: 0;">
             <span class="option-letter" :style="i === gameStore.roundResult?.correct_index ? { background: 'var(--success)', color: '#fff' } : (i === gameStore.selectedAnswer && i !== gameStore.roundResult?.correct_index ? { background: 'var(--danger)', color: '#fff' } : {})">
               {{ ['A', 'B', 'C', 'D'][i] }}
             </span>
             <span>{{ opt }}</span>
+            <span v-if="i === gameStore.roundResult?.correct_index" style="margin-left: auto; color: var(--success); font-weight: 700;">&#10003;</span>
+            <span v-if="i === gameStore.selectedAnswer && i !== gameStore.roundResult?.correct_index" style="margin-left: auto; color: var(--danger); font-weight: 700;">&#10005;</span>
           </div>
         </div>
-
-        <div v-if="gameStore.roundResult?.explanation" style="margin-top: 16px; padding: 12px; background: var(--bg-secondary); border-radius: 8px; text-align: left; font-size: 13px; color: var(--text-secondary);">
+        <div v-if="gameStore.roundResult?.explanation" style="margin-top: 12px; padding: 12px; background: var(--bg-secondary); border-radius: 8px; font-size: 13px; color: var(--text-secondary);">
           <strong>Explicație:</strong> {{ gameStore.roundResult.explanation }}
         </div>
       </div>
 
-      <!-- Mini leaderboard -->
+      <!-- Round Statistics -->
+      <div class="card" style="margin-bottom: 16px;">
+        <h4 style="font-weight: 700; margin-bottom: 12px;">Statistici rundă</h4>
+        <div class="stat-grid" style="grid-template-columns: repeat(4, 1fr);">
+          <div class="stat-card">
+            <div class="stat-value" style="color: var(--success);">{{ gameStore.roundResult?.round_stats?.accuracy_pct || 0 }}%</div>
+            <div class="stat-label">Au nimerit</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: var(--accent);">{{ gameStore.roundResult?.round_stats?.correct_count || 0 }}/{{ gameStore.roundResult?.round_stats?.total_players || 0 }}</div>
+            <div class="stat-label">Corecte</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: var(--warning);">{{ gameStore.roundResult?.round_stats?.avg_answer_time || 0 }}s</div>
+            <div class="stat-label">Timp mediu</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" style="color: var(--gold); font-size: 16px;">
+              {{ gameStore.roundResult?.round_stats?.fastest_player || '-' }}
+            </div>
+            <div class="stat-label">{{ gameStore.roundResult?.round_stats?.fastest_time ? gameStore.roundResult.round_stats.fastest_time + 's' : 'Cel mai rapid' }}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Leaderboard -->
       <div class="card">
         <h3 style="font-weight: 700; margin-bottom: 8px;">Clasament</h3>
         <div v-if="gameStore.roundResult?.eliminated?.length" style="margin-bottom: 12px; font-size: 13px; color: var(--danger);">
@@ -176,7 +232,11 @@
           <span class="leaderboard-name">
             {{ p.nickname }}
             <span v-if="p.nickname === gameStore.nickname" style="color: var(--accent);"> (tu)</span>
+            <span v-if="p.tier" style="font-size: 10px; color: var(--text-muted); margin-left: 4px;">
+              {{ p.tier === 'advanced' ? '★' : '○' }}
+            </span>
           </span>
+          <span style="font-size: 11px; color: var(--text-muted); margin-right: 8px;">{{ p.accuracy || 0 }}%</span>
           <span class="leaderboard-score">{{ p.score }}</span>
         </div>
       </div>
@@ -208,6 +268,7 @@
             {{ p.nickname }}
             <span v-if="p.nickname === gameStore.nickname" style="color: var(--accent);"> (tu)</span>
           </span>
+          <span style="font-size: 11px; color: var(--text-muted); margin-right: 8px;">{{ p.accuracy || 0 }}%</span>
           <span class="leaderboard-score">{{ p.score }} pts</span>
         </div>
       </div>
@@ -221,7 +282,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useGameStore } from '../../stores/game'
 import { GameWebSocket } from '../../services/websocket'
@@ -231,6 +292,9 @@ const router = useRouter()
 const gameStore = useGameStore()
 const ws = new GameWebSocket()
 const connectionError = ref('')
+const tierNotification = ref('')
+const tierLabel = ref('')
+const tierIcon = ref('')
 
 const pin = route.params.pin
 const nickname = route.query.nickname || 'Player'
@@ -261,7 +325,16 @@ function selectAnswer(index) {
 
 onMounted(async () => {
   gameStore.reset()
-  ws.on('*', (data) => gameStore.handleMessage(data))
+  ws.on('*', (data) => {
+    if (data.type === 'tier_assigned') {
+      tierNotification.value = data.message
+      tierLabel.value = data.tier_label
+      tierIcon.value = data.tier === 'advanced' ? '⭐' : '🎯'
+      setTimeout(() => { tierNotification.value = '' }, 4000)
+      return
+    }
+    gameStore.handleMessage(data)
+  })
   ws.on('error', (data) => {
     connectionError.value = data.message
   })

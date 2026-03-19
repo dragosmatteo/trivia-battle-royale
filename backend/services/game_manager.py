@@ -1,6 +1,7 @@
 """
 GameManager - Singleton pattern for managing real-time Battle Royale game sessions.
-Handles WebSocket connections, game state, and elimination logic.
+Handles WebSocket connections, game state, elimination logic,
+round statistics, and adaptive difficulty.
 """
 
 import asyncio
@@ -15,6 +16,9 @@ from fastapi import WebSocket
 # expires are still accepted (compensates for network latency).
 ANSWER_GRACE_PERIOD = 2.5
 
+# After this many qualifying rounds, players split into difficulty tiers
+QUALIFYING_ROUNDS = 3
+
 
 @dataclass
 class Player:
@@ -25,6 +29,9 @@ class Player:
     current_answer: int | None = None
     answer_time: float | None = None
     streak: int = 0
+    correct_count: int = 0      # total correct answers
+    total_answered: int = 0     # total questions answered
+    difficulty_tier: str = ""   # "", "advanced", "standard"
 
 
 @dataclass
@@ -40,10 +47,14 @@ class GameRoom:
     time_per_question: int = 30
     round_start_time: float = 0
     eliminated_this_round: list[str] = field(default_factory=list)
-    # Mapping from shuffled index → original index for current question
+    # Mapping from shuffled index -> original index for current question
     shuffle_map: list[int] = field(default_factory=list)
     # The original correct_index for the current question (before shuffle)
     original_correct_index: int = -1
+    # Round history for statistics
+    round_history: list[dict] = field(default_factory=list)
+    # Whether difficulty tiers have been assigned
+    tiers_assigned: bool = False
 
 
 class GameManager:
@@ -142,6 +153,66 @@ class GameManager:
         await asyncio.sleep(3)
         await self._next_question(room)
 
+    def _assign_difficulty_tiers(self, room: GameRoom):
+        """After qualifying rounds, split players into difficulty tiers."""
+        if room.tiers_assigned:
+            return
+
+        alive_players = [p for p in room.players.values() if p.is_alive]
+        if len(alive_players) < 2:
+            return
+
+        # Calculate accuracy for each player
+        for p in alive_players:
+            p._accuracy = p.correct_count / max(p.total_answered, 1)
+
+        # Sort by accuracy descending
+        alive_players.sort(key=lambda p: p._accuracy, reverse=True)
+
+        # Top half = advanced, bottom half = standard
+        mid = len(alive_players) // 2
+        for i, p in enumerate(alive_players):
+            p.difficulty_tier = "advanced" if i < mid else "standard"
+
+        room.tiers_assigned = True
+
+        # Clean up temp attribute
+        for p in alive_players:
+            if hasattr(p, '_accuracy'):
+                del p._accuracy
+
+    def _select_question_for_round(self, room: GameRoom) -> dict:
+        """Select the next question, considering adaptive difficulty after qualifying."""
+        q = room.questions[room.current_question_index]
+
+        # After qualifying rounds, try to pick difficulty-appropriate questions
+        if room.tiers_assigned and room.current_question_index < len(room.questions):
+            # Count alive players per tier
+            alive = [p for p in room.players.values() if p.is_alive]
+            advanced_count = sum(1 for p in alive if p.difficulty_tier == "advanced")
+            standard_count = sum(1 for p in alive if p.difficulty_tier == "standard")
+
+            # If mostly advanced players alive, prefer harder questions
+            if advanced_count > standard_count:
+                # Look ahead for a hard question
+                for i in range(room.current_question_index, min(room.current_question_index + 3, len(room.questions))):
+                    if room.questions[i].get("difficulty") == "hard":
+                        # Swap current with hard question
+                        room.questions[room.current_question_index], room.questions[i] = \
+                            room.questions[i], room.questions[room.current_question_index]
+                        q = room.questions[room.current_question_index]
+                        break
+            elif standard_count > advanced_count:
+                # Look ahead for an easy question
+                for i in range(room.current_question_index, min(room.current_question_index + 3, len(room.questions))):
+                    if room.questions[i].get("difficulty") == "easy":
+                        room.questions[room.current_question_index], room.questions[i] = \
+                            room.questions[i], room.questions[room.current_question_index]
+                        q = room.questions[room.current_question_index]
+                        break
+
+        return q
+
     async def _next_question(self, room: GameRoom):
         room.current_question_index += 1
 
@@ -154,7 +225,26 @@ class GameManager:
             await self._end_game(room)
             return
 
-        q = room.questions[room.current_question_index]
+        # After qualifying rounds, assign difficulty tiers
+        if room.current_question_index == QUALIFYING_ROUNDS and not room.tiers_assigned:
+            self._assign_difficulty_tiers(room)
+            # Notify all players of their tier
+            for player in room.players.values():
+                if player.difficulty_tier and player.is_alive:
+                    tier_label = "Arena Avansata" if player.difficulty_tier == "advanced" else "Arena Standard"
+                    try:
+                        await player.websocket.send_json({
+                            "type": "tier_assigned",
+                            "tier": player.difficulty_tier,
+                            "tier_label": tier_label,
+                            "message": f"Faza de calificare completă! Ai fost repartizat în {tier_label}.",
+                        })
+                    except Exception:
+                        pass
+
+        # Select question (may adapt difficulty)
+        q = self._select_question_for_round(room)
+
         room.status = "round_active"
         room.round_start_time = time.time()
         room.eliminated_this_round = []
@@ -171,11 +261,17 @@ class GameManager:
 
         indices = list(range(len(original_options)))
         random.shuffle(indices)
-        room.shuffle_map = indices  # shuffle_map[new_pos] = old_pos
+        room.shuffle_map = indices
 
         shuffled_options = [original_options[i] for i in indices]
-        # Find where the correct answer ended up after shuffle
         shuffled_correct_index = indices.index(original_correct)
+
+        # Determine phase label
+        phase = "Calificare" if room.current_question_index < QUALIFYING_ROUNDS else ""
+        if room.tiers_assigned:
+            phase = "Arena Adaptivă"
+        if room.current_question_index >= len(room.questions) - 5:
+            phase = "Sudden Death"
 
         # Send question to all players (WITHOUT correct answer!)
         question_data = {
@@ -187,12 +283,16 @@ class GameManager:
             "difficulty": q.get("difficulty", "medium"),
             "time_limit": room.time_per_question,
             "alive_count": alive_count,
+            "phase": phase,
         }
 
-        # Send to all players (alive get interactive, spectators get view-only)
+        # Send to all players
         for player in room.players.values():
             try:
-                await player.websocket.send_json(question_data)
+                player_data = {**question_data}
+                if player.difficulty_tier:
+                    player_data["your_tier"] = player.difficulty_tier
+                await player.websocket.send_json(player_data)
             except Exception:
                 pass
 
@@ -206,7 +306,7 @@ class GameManager:
             except Exception:
                 pass
 
-        # Start timer — add grace period so late answers aren't lost
+        # Start timer
         await asyncio.sleep(room.time_per_question + ANSWER_GRACE_PERIOD)
         if room.status == "round_active":
             await self._end_round(room)
@@ -221,14 +321,12 @@ class GameManager:
             return
 
         elapsed = time.time() - room.round_start_time
-        # Accept answers within time limit + grace period
         if elapsed > room.time_per_question + ANSWER_GRACE_PERIOD:
-            return  # Too late, ignore
+            return
 
         player.current_answer = answer
-        # Clamp answer_time to time_per_question so late answers don't get
-        # negative speed bonus but are still counted as answered
         player.answer_time = min(elapsed, float(room.time_per_question))
+        player.total_answered += 1
 
         # Notify the player that answer was received
         try:
@@ -252,13 +350,21 @@ class GameManager:
 
         room.status = "round_ended"
         q = room.questions[room.current_question_index]
-        # Use the SHUFFLED correct index (where the correct answer ended up
-        # after shuffling the options for this round)
         correct = room.shuffle_map.index(room.original_correct_index) if room.shuffle_map else q["correct_index"]
 
-        # Determine if this is a "sudden death" round (last 5 questions or less)
+        # Determine if this is a "sudden death" round
         is_sudden_death = room.current_question_index >= len(room.questions) - 5
         any_correct = False
+
+        # --- Compute round statistics ---
+        alive_players = [p for p in room.players.values() if p.is_alive]
+        total_alive = len(alive_players)
+        correct_count = 0
+        wrong_count = 0
+        timeout_count = 0
+        answer_times = []
+        fastest_player = None
+        fastest_time = float('inf')
 
         results = {}
         for nickname, player in room.players.items():
@@ -269,12 +375,13 @@ class GameManager:
             answered_correctly = player.current_answer == correct
             if answered_correctly:
                 any_correct = True
+                correct_count += 1
+                player.correct_count += 1
                 # Score: base points + speed bonus
                 time_bonus = max(0, int((room.time_per_question - (player.answer_time or room.time_per_question)) * 10))
                 points = 100 + time_bonus
                 player.score += points
                 player.streak += 1
-                # Streak bonus
                 if player.streak >= 3:
                     player.score += 50
                 results[nickname] = {
@@ -282,24 +389,32 @@ class GameManager:
                     "score": player.score,
                     "points_earned": points,
                     "streak": player.streak,
+                    "answer_time": round(player.answer_time or 0, 1),
                 }
+                if player.answer_time and player.answer_time < fastest_time:
+                    fastest_time = player.answer_time
+                    fastest_player = nickname
+                answer_times.append(player.answer_time or room.time_per_question)
             else:
                 player.streak = 0
                 if player.current_answer is None:
-                    # Didn't answer in time — eliminated
+                    timeout_count += 1
                     player.is_alive = False
                     player.score = max(0, player.score)
                     room.eliminated_this_round.append(nickname)
                     results[nickname] = {"status": "timeout_eliminated", "score": player.score}
                 elif is_sudden_death and any_correct:
-                    # Sudden death: wrong answer = eliminated if someone else got it right
+                    wrong_count += 1
                     player.is_alive = False
                     room.eliminated_this_round.append(nickname)
                     results[nickname] = {"status": "eliminated", "score": player.score}
                 else:
+                    wrong_count += 1
                     results[nickname] = {"status": "wrong", "score": player.score}
+                    if player.answer_time:
+                        answer_times.append(player.answer_time)
 
-        # In sudden death, retroactively eliminate wrong answers if any_correct
+        # In sudden death, retroactively eliminate wrong answers
         if is_sudden_death and any_correct:
             for nickname, player in room.players.items():
                 if player.is_alive and player.current_answer != correct and player.current_answer is not None:
@@ -309,15 +424,43 @@ class GameManager:
 
         alive_count = sum(1 for p in room.players.values() if p.is_alive)
 
+        # Build statistics
+        accuracy_pct = round((correct_count / total_alive * 100)) if total_alive > 0 else 0
+        avg_time = round(sum(answer_times) / len(answer_times), 1) if answer_times else 0
+
+        round_stats = {
+            "total_players": total_alive,
+            "correct_count": correct_count,
+            "wrong_count": wrong_count,
+            "timeout_count": timeout_count,
+            "accuracy_pct": accuracy_pct,
+            "avg_answer_time": avg_time,
+            "fastest_player": fastest_player,
+            "fastest_time": round(fastest_time, 1) if fastest_player else None,
+        }
+
+        # Save round history
+        room.round_history.append({
+            "question_index": room.current_question_index,
+            "stats": round_stats,
+        })
+
+        # Get shuffled options for showing correct answer
+        shuffled_options = [q["options"][i] for i in room.shuffle_map] if room.shuffle_map else q["options"]
+        correct_answer_text = shuffled_options[correct] if correct < len(shuffled_options) else ""
+
         round_result = {
             "type": "round_result",
             "question_index": room.current_question_index,
             "correct_index": correct,
+            "correct_answer_text": correct_answer_text,
             "explanation": q.get("explanation", ""),
             "eliminated": room.eliminated_this_round,
             "alive_count": alive_count,
             "is_sudden_death": is_sudden_death,
             "leaderboard": self._get_leaderboard(room),
+            "round_stats": round_stats,
+            "options": shuffled_options,
         }
 
         # Send personalized results to each player
@@ -328,6 +471,10 @@ class GameManager:
                     "your_result": results.get(nickname, {}),
                     "your_answer": player.current_answer,
                     "is_alive": player.is_alive,
+                    "your_score": player.score,
+                    "your_accuracy": round(player.correct_count / max(player.total_answered, 1) * 100),
+                    "your_streak": player.streak,
+                    "your_tier": player.difficulty_tier,
                 }
                 await player.websocket.send_json(personal_result)
             except Exception:
@@ -343,8 +490,8 @@ class GameManager:
             except Exception:
                 pass
 
-        # Wait before next question
-        await asyncio.sleep(5)
+        # Wait before next question (longer to read stats)
+        await asyncio.sleep(7)
 
         if alive_count <= 1 or room.current_question_index >= len(room.questions) - 1:
             await self._end_game(room)
@@ -357,11 +504,20 @@ class GameManager:
 
         winner = leaderboard[0]["nickname"] if leaderboard else "Nimeni"
 
+        # Final statistics
+        total_rounds = room.current_question_index + 1
+        game_stats = {
+            "total_rounds": total_rounds,
+            "total_players": len(room.players),
+            "survivors": sum(1 for p in room.players.values() if p.is_alive),
+        }
+
         end_data = {
             "type": "game_over",
             "winner": winner,
             "leaderboard": leaderboard,
-            "total_rounds": room.current_question_index + 1,
+            "total_rounds": total_rounds,
+            "game_stats": game_stats,
         }
 
         await self._broadcast_all(room, end_data)
@@ -378,6 +534,10 @@ class GameManager:
                 "score": p.score,
                 "is_alive": p.is_alive,
                 "streak": p.streak,
+                "correct_count": p.correct_count,
+                "total_answered": p.total_answered,
+                "accuracy": round(p.correct_count / max(p.total_answered, 1) * 100),
+                "tier": p.difficulty_tier,
             }
             for i, p in enumerate(players)
         ]
@@ -394,14 +554,12 @@ class GameManager:
         await self._broadcast_all(room, player_list)
 
     async def _broadcast_all(self, room: GameRoom, data: dict):
-        # Send to professor
         if room.professor_ws:
             try:
                 await room.professor_ws.send_json(data)
             except Exception:
                 pass
 
-        # Send to all players
         for player in room.players.values():
             try:
                 await player.websocket.send_json(data)
