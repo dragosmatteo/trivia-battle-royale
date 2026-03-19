@@ -11,6 +11,10 @@ import time
 from dataclasses import dataclass, field
 from fastapi import WebSocket
 
+# Grace period in seconds — answers arriving within this window after timer
+# expires are still accepted (compensates for network latency).
+ANSWER_GRACE_PERIOD = 2.5
+
 
 @dataclass
 class Player:
@@ -36,6 +40,10 @@ class GameRoom:
     time_per_question: int = 30
     round_start_time: float = 0
     eliminated_this_round: list[str] = field(default_factory=list)
+    # Mapping from shuffled index → original index for current question
+    shuffle_map: list[int] = field(default_factory=list)
+    # The original correct_index for the current question (before shuffle)
+    original_correct_index: int = -1
 
 
 class GameManager:
@@ -156,13 +164,26 @@ class GameManager:
             p.current_answer = None
             p.answer_time = None
 
-        # Send question to all alive players (without correct answer!)
+        # --- Shuffle options so correct answer is in a random position ---
+        original_options = q["options"]
+        original_correct = q["correct_index"]
+        room.original_correct_index = original_correct
+
+        indices = list(range(len(original_options)))
+        random.shuffle(indices)
+        room.shuffle_map = indices  # shuffle_map[new_pos] = old_pos
+
+        shuffled_options = [original_options[i] for i in indices]
+        # Find where the correct answer ended up after shuffle
+        shuffled_correct_index = indices.index(original_correct)
+
+        # Send question to all players (WITHOUT correct answer!)
         question_data = {
             "type": "question",
             "index": room.current_question_index,
             "total": len(room.questions),
             "question_text": q["question_text"],
-            "options": q["options"],
+            "options": shuffled_options,
             "difficulty": q.get("difficulty", "medium"),
             "time_limit": room.time_per_question,
             "alive_count": alive_count,
@@ -175,18 +196,18 @@ class GameManager:
             except Exception:
                 pass
 
-        # Send to professor too
+        # Send to professor with correct answer marked
         if room.professor_ws:
             try:
                 await room.professor_ws.send_json({
                     **question_data,
-                    "correct_index": q["correct_index"],
+                    "correct_index": shuffled_correct_index,
                 })
             except Exception:
                 pass
 
-        # Start timer
-        await asyncio.sleep(room.time_per_question)
+        # Start timer — add grace period so late answers aren't lost
+        await asyncio.sleep(room.time_per_question + ANSWER_GRACE_PERIOD)
         if room.status == "round_active":
             await self._end_round(room)
 
@@ -199,8 +220,24 @@ class GameManager:
         if not player or not player.is_alive or player.current_answer is not None:
             return
 
+        elapsed = time.time() - room.round_start_time
+        # Accept answers within time limit + grace period
+        if elapsed > room.time_per_question + ANSWER_GRACE_PERIOD:
+            return  # Too late, ignore
+
         player.current_answer = answer
-        player.answer_time = time.time() - room.round_start_time
+        # Clamp answer_time to time_per_question so late answers don't get
+        # negative speed bonus but are still counted as answered
+        player.answer_time = min(elapsed, float(room.time_per_question))
+
+        # Notify the player that answer was received
+        try:
+            await player.websocket.send_json({
+                "type": "answer_confirmed",
+                "selected": answer,
+            })
+        except Exception:
+            pass
 
         # Check if all alive players have answered
         alive_players = [p for p in room.players.values() if p.is_alive]
@@ -215,7 +252,9 @@ class GameManager:
 
         room.status = "round_ended"
         q = room.questions[room.current_question_index]
-        correct = q["correct_index"]
+        # Use the SHUFFLED correct index (where the correct answer ended up
+        # after shuffling the options for this round)
+        correct = room.shuffle_map.index(room.original_correct_index) if room.shuffle_map else q["correct_index"]
 
         # Determine if this is a "sudden death" round (last 5 questions or less)
         is_sudden_death = room.current_question_index >= len(room.questions) - 5

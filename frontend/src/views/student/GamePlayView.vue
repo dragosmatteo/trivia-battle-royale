@@ -89,7 +89,21 @@
             {{ ['A', 'B', 'C', 'D'][i] }}
           </span>
           <span>{{ opt }}</span>
+          <span v-if="gameStore.selectedAnswer === i && gameStore.answerConfirmed"
+            style="margin-left: auto; font-size: 12px; color: var(--success); font-weight: 600;">
+            &#10003; Trimis
+          </span>
         </button>
+      </div>
+
+      <!-- Answer status feedback -->
+      <div v-if="gameStore.answerLocked" style="text-align: center; margin-top: 16px;">
+        <p v-if="gameStore.answerConfirmed" style="color: var(--success); font-weight: 600; font-size: 14px;">
+          &#10003; Răspunsul tău a fost înregistrat! Așteptăm ceilalți jucători<span class="waiting-dots"></span>
+        </p>
+        <p v-else style="color: var(--warning); font-size: 14px;">
+          Se trimite răspunsul<span class="waiting-dots"></span>
+        </p>
       </div>
     </div>
 

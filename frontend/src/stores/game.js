@@ -19,6 +19,7 @@ export const useGameStore = defineStore('game', () => {
   const timeLeft = ref(30)
   const selectedAnswer = ref(null)
   const answerLocked = ref(false)
+  const answerConfirmed = ref(false) // server confirmed answer received
 
   // Round result
   const roundResult = ref(null)
@@ -90,9 +91,14 @@ export const useGameStore = defineStore('game', () => {
         aliveCount.value = data.alive_count
         selectedAnswer.value = null
         answerLocked.value = false
+        answerConfirmed.value = false
         roundResult.value = null
         myResult.value = null
         startTimer()
+        break
+
+      case 'answer_confirmed':
+        answerConfirmed.value = true
         break
 
       case 'round_result':
@@ -131,6 +137,7 @@ export const useGameStore = defineStore('game', () => {
     totalQuestions.value = 0
     selectedAnswer.value = null
     answerLocked.value = false
+    answerConfirmed.value = false
     roundResult.value = null
     myResult.value = null
     leaderboard.value = []
@@ -143,7 +150,7 @@ export const useGameStore = defineStore('game', () => {
   return {
     isConnected, pin, nickname, status, isAlive,
     currentQuestion, questionIndex, totalQuestions, timeLimit, timeLeft,
-    selectedAnswer, answerLocked, roundResult, myResult,
+    selectedAnswer, answerLocked, answerConfirmed, roundResult, myResult,
     leaderboard, players, aliveCount, winner, finalLeaderboard,
     isSpectator, isSuddenDeath,
     handleMessage, startTimer, stopTimer, reset,
