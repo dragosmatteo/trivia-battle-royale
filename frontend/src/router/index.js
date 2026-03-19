@@ -19,6 +19,12 @@ const routes = [
   {
     path: '/professor',
     name: 'ProfessorDashboard',
+    component: () => import('../views/professor/AdminDashboardView.vue'),
+    meta: { requiresAuth: true, role: 'professor' },
+  },
+  {
+    path: '/professor/courses',
+    name: 'ProfessorCourses',
     component: () => import('../views/professor/DashboardView.vue'),
     meta: { requiresAuth: true, role: 'professor' },
   },
@@ -32,6 +38,18 @@ const routes = [
     path: '/professor/game/:pin',
     name: 'GameControl',
     component: () => import('../views/professor/GameControlView.vue'),
+    meta: { requiresAuth: true, role: 'professor' },
+  },
+  {
+    path: '/professor/history',
+    name: 'GameHistory',
+    component: () => import('../views/professor/GameHistoryView.vue'),
+    meta: { requiresAuth: true, role: 'professor' },
+  },
+  {
+    path: '/professor/classes',
+    name: 'ClassManagement',
+    component: () => import('../views/professor/ClassManagementView.vue'),
     meta: { requiresAuth: true, role: 'professor' },
   },
   // Student routes

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from models.database import init_db
-from routers import auth, courses, game
+from routers import auth, courses, game, admin
 from services.game_manager import game_manager
 
 
@@ -81,6 +81,7 @@ def sanitize_input(value: str) -> str:
 app.include_router(auth.router)
 app.include_router(courses.router)
 app.include_router(game.router)
+app.include_router(admin.router)
 
 
 # --- WebSocket Endpoints ---

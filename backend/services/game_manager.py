@@ -10,6 +10,7 @@ import random
 import string
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from fastapi import WebSocket
 
 # Grace period in seconds — answers arriving within this window after timer
@@ -521,6 +522,68 @@ class GameManager:
         }
 
         await self._broadcast_all(room, end_data)
+
+        # --- Save results to database ---
+        await self._save_results_to_db(room)
+
+    async def _save_results_to_db(self, room: GameRoom):
+        """Persist final game results into game_results and update game_sessions."""
+        try:
+            from models.database import get_db
+            db = await get_db()
+
+            # Find the session id by pin_code
+            cursor = await db.execute(
+                "SELECT id FROM game_sessions WHERE pin_code = ?", (room.pin,)
+            )
+            session_row = await cursor.fetchone()
+            if not session_row:
+                await db.close()
+                return
+
+            session_id = session_row["id"]
+            finished_at = datetime.now(timezone.utc).isoformat()
+
+            # Update session status to finished
+            await db.execute(
+                "UPDATE game_sessions SET status = 'finished' WHERE id = ?",
+                (session_id,),
+            )
+
+            # Determine elimination round for each player
+            # Players who are still alive were never eliminated
+            for player in room.players.values():
+                eliminated_round = None
+                if not player.is_alive:
+                    # Check round_history to find when this player was eliminated
+                    for rh in room.round_history:
+                        q_idx = rh["question_index"]
+                        # We don't track per-player elimination in round_history directly,
+                        # so we estimate: the player was eliminated at the round
+                        # equal to the number of questions they answered (total_answered)
+                        pass
+                    # Best estimate: eliminated at the round = total_answered (0-indexed)
+                    eliminated_round = player.total_answered if player.total_answered > 0 else 1
+
+                await db.execute(
+                    """INSERT INTO game_results
+                       (session_id, player_name, user_id, score, is_alive, eliminated_at_round, finished_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        session_id,
+                        player.nickname,
+                        None,  # user_id not tracked in current WebSocket flow
+                        player.score,
+                        1 if player.is_alive else 0,
+                        eliminated_round,
+                        finished_at,
+                    ),
+                )
+
+            await db.commit()
+            await db.close()
+        except Exception as e:
+            print(f"Error saving game results: {e}")
 
     def _get_leaderboard(self, room: GameRoom) -> list[dict]:
         players = sorted(
