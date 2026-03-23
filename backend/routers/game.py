@@ -1,5 +1,7 @@
 import json
-from fastapi import APIRouter, HTTPException, Depends
+import re
+import time
+from fastapi import APIRouter, HTTPException, Depends, Request
 from models.database import get_db
 from models.schemas import GameSessionCreate, GameSessionResponse
 from routers.auth import get_current_user
@@ -8,12 +10,52 @@ from services.game_manager import game_manager
 router = APIRouter(prefix="/api/game", tags=["Game"])
 
 
-@router.post("/create-session", response_model=GameSessionResponse)
-async def create_session(req: GameSessionCreate, user: dict = Depends(get_current_user)):
+# --- Rate limiting for PIN checks (anti brute-force) ---
+_pin_check_attempts: dict[str, list[float]] = {}
+PIN_CHECK_MAX = 10  # max attempts per minute per IP
+PIN_CHECK_WINDOW = 60  # seconds
+
+
+def _rate_limit_pin_check(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+
+    if client_ip not in _pin_check_attempts:
+        _pin_check_attempts[client_ip] = []
+
+    _pin_check_attempts[client_ip] = [
+        t for t in _pin_check_attempts[client_ip] if now - t < PIN_CHECK_WINDOW
+    ]
+
+    if len(_pin_check_attempts[client_ip]) >= PIN_CHECK_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail="Prea multe incercari. Asteptati un minut.",
+        )
+
+    _pin_check_attempts[client_ip].append(now)
+
+
+def _require_professor(user: dict):
     if user["role"] != "professor":
         raise HTTPException(status_code=403, detail="Doar profesorii pot crea sesiuni")
 
+
+@router.post("/create-session", response_model=GameSessionResponse)
+async def create_session(req: GameSessionCreate, user: dict = Depends(get_current_user)):
+    _require_professor(user)
+
     db = await get_db()
+
+    # Verify the course belongs to this professor
+    cursor = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND professor_id = ?",
+        (req.course_id, user["id"]),
+    )
+    if not await cursor.fetchone():
+        await db.close()
+        raise HTTPException(status_code=404, detail="Cursul nu a fost gasit")
+
     # Get questions for the course
     cursor = await db.execute(
         "SELECT * FROM questions WHERE course_id = ? ORDER BY RANDOM() LIMIT ?",
@@ -22,7 +64,7 @@ async def create_session(req: GameSessionCreate, user: dict = Depends(get_curren
     rows = await cursor.fetchall()
     if len(rows) < 3:
         await db.close()
-        raise HTTPException(status_code=400, detail="Cursul nu are suficiente întrebări (minim 3). Generați mai întâi întrebări.")
+        raise HTTPException(status_code=400, detail="Cursul nu are suficiente intrebari (minim 3). Generati mai intai intrebari.")
 
     questions = [
         {
@@ -35,7 +77,6 @@ async def create_session(req: GameSessionCreate, user: dict = Depends(get_curren
         for r in rows
     ]
 
-    # Create game room in the GameManager singleton
     room_pin = game_manager.create_room(
         course_id=req.course_id,
         professor_id=user["id"],
@@ -43,7 +84,6 @@ async def create_session(req: GameSessionCreate, user: dict = Depends(get_curren
         time_per_question=req.time_per_question,
     )
 
-    # Save to database
     cursor = await db.execute(
         "INSERT INTO game_sessions (pin_code, course_id, professor_id, status, time_per_question) VALUES (?, ?, ?, 'waiting', ?)",
         (room_pin, req.course_id, user["id"], req.time_per_question),
@@ -83,10 +123,17 @@ async def list_sessions(user: dict = Depends(get_current_user)):
 
 
 @router.get("/check-pin/{pin_code}")
-async def check_pin(pin_code: str):
+async def check_pin(pin_code: str, request: Request):
+    # Rate limit PIN checks to prevent brute-force
+    _rate_limit_pin_check(request)
+
+    # Validate PIN format
+    if not re.match(r'^\d{6}$', pin_code):
+        raise HTTPException(status_code=400, detail="Format PIN invalid (trebuie 6 cifre)")
+
     room = game_manager.get_room(pin_code)
     if not room:
-        raise HTTPException(status_code=404, detail="Sesiunea nu există")
+        raise HTTPException(status_code=404, detail="Sesiunea nu exista")
     if room.status != "waiting":
-        raise HTTPException(status_code=400, detail="Sesiunea a început deja")
+        raise HTTPException(status_code=400, detail="Sesiunea a inceput deja")
     return {"valid": True, "players_count": len(room.players)}

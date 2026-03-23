@@ -8,7 +8,7 @@ export const useGameStore = defineStore('game', () => {
   const nickname = ref('')
 
   // Game state
-  const status = ref('idle') // idle, waiting, playing, round_active, round_ended, finished
+  const status = ref('idle') // idle, waiting, playing, round_active, round_ended, loading_next, finished
   const isAlive = ref(true)
 
   // Current question
@@ -19,7 +19,7 @@ export const useGameStore = defineStore('game', () => {
   const timeLeft = ref(30)
   const selectedAnswer = ref(null)
   const answerLocked = ref(false)
-  const answerConfirmed = ref(false) // server confirmed answer received
+  const answerConfirmed = ref(false)
 
   // Round result
   const roundResult = ref(null)
@@ -34,11 +34,18 @@ export const useGameStore = defineStore('game', () => {
   const winner = ref('')
   const finalLeaderboard = ref([])
 
+  // League system
+  const hasLeagues = ref(false)
+  const myLeague = ref('')
+  const leagues = ref({ champions: [], challengers: [] })
+
+  // Loading transition
+  const loadingMessage = ref('')
+
   // Timer interval
   let timerInterval = null
 
-  const isSpectator = computed(() => !isAlive.value && status.value !== 'finished')
-  const isSuddenDeath = computed(() => roundResult.value?.is_sudden_death || false)
+  const isSpectator = computed(() => false) // No more spectators - everyone plays
 
   function startTimer() {
     stopTimer()
@@ -94,6 +101,7 @@ export const useGameStore = defineStore('game', () => {
         answerConfirmed.value = false
         roundResult.value = null
         myResult.value = null
+        loadingMessage.value = ''
         startTimer()
         break
 
@@ -107,8 +115,12 @@ export const useGameStore = defineStore('game', () => {
         roundResult.value = data
         myResult.value = data.your_result
         leaderboard.value = data.leaderboard
-        isAlive.value = data.is_alive !== undefined ? data.is_alive : isAlive.value
         aliveCount.value = data.alive_count
+        break
+
+      case 'loading_next':
+        status.value = 'loading_next'
+        loadingMessage.value = data.message
         break
 
       case 'game_over':
@@ -117,6 +129,9 @@ export const useGameStore = defineStore('game', () => {
         winner.value = data.winner
         finalLeaderboard.value = data.leaderboard
         leaderboard.value = data.leaderboard
+        hasLeagues.value = data.has_leagues || false
+        leagues.value = data.leagues || { champions: [], challengers: [] }
+        myLeague.value = data.your_league || ''
         break
 
       case 'error':
@@ -145,6 +160,10 @@ export const useGameStore = defineStore('game', () => {
     aliveCount.value = 0
     winner.value = ''
     finalLeaderboard.value = []
+    hasLeagues.value = false
+    myLeague.value = ''
+    leagues.value = { champions: [], challengers: [] }
+    loadingMessage.value = ''
   }
 
   return {
@@ -152,7 +171,7 @@ export const useGameStore = defineStore('game', () => {
     currentQuestion, questionIndex, totalQuestions, timeLimit, timeLeft,
     selectedAnswer, answerLocked, answerConfirmed, roundResult, myResult,
     leaderboard, players, aliveCount, winner, finalLeaderboard,
-    isSpectator, isSuddenDeath,
+    isSpectator, hasLeagues, myLeague, leagues, loadingMessage,
     handleMessage, startTimer, stopTimer, reset,
   }
 })

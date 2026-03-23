@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from typing import Optional
 from models.database import get_db
@@ -11,33 +12,67 @@ from config import UPLOAD_DIR
 
 router = APIRouter(prefix="/api/courses", tags=["Courses"])
 
+# --- Security constants ---
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
+ALLOWED_EXTENSIONS = {".pdf"}
+
+
+def _require_professor(user: dict):
+    if user["role"] != "professor":
+        raise HTTPException(status_code=403, detail="Acces permis doar pentru profesori")
+
+
+def _validate_upload(file: UploadFile):
+    """Validate uploaded file type and name."""
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="Fisierul nu a fost furnizat")
+    ext = os.path.splitext(file.filename)[1].lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Tip de fisier nepermis. Doar: {', '.join(ALLOWED_EXTENSIONS)}")
+    # Sanitize filename
+    safe_name = re.sub(r'[^a-zA-Z0-9._-]', '_', file.filename)
+    return safe_name
+
+
+async def _verify_course_ownership(db, course_id: int, professor_id: int):
+    """Verify that the course belongs to the professor."""
+    cursor = await db.execute(
+        "SELECT id FROM courses WHERE id = ? AND professor_id = ?",
+        (course_id, professor_id),
+    )
+    if not await cursor.fetchone():
+        await db.close()
+        raise HTTPException(status_code=404, detail="Cursul nu a fost gasit")
+
 
 # ──────────────────── Course CRUD ────────────────────
 
 @router.post("/", response_model=CourseResponse)
 async def create_course(
-    title: str = Form(...),
-    description: str = Form(""),
+    title: str = Form(..., min_length=2, max_length=200),
+    description: str = Form("", max_length=1000),
     pdf: UploadFile = File(None),
     user: dict = Depends(get_current_user),
 ):
-    if user["role"] != "professor":
-        raise HTTPException(status_code=403, detail="Doar profesorii pot crea cursuri")
+    _require_professor(user)
 
     extracted = ""
     filename = None
 
-    # If PDF provided, save and extract
+    # If PDF provided, validate and save
     if pdf and pdf.filename:
-        filename = f"{user['id']}_{pdf.filename}"
-        filepath = os.path.join(UPLOAD_DIR, filename)
+        safe_name = _validate_upload(pdf)
         content = await pdf.read()
+        if len(content) > MAX_UPLOAD_SIZE:
+            raise HTTPException(status_code=400, detail=f"Fisierul este prea mare (max {MAX_UPLOAD_SIZE // (1024*1024)} MB)")
+
+        filename = f"{user['id']}_{safe_name}"
+        filepath = os.path.join(UPLOAD_DIR, filename)
         with open(filepath, "wb") as f:
             f.write(content)
 
         extracted = extract_text_from_pdf(filepath)
 
-        # Also save as first material
         db = await get_db()
         cursor = await db.execute(
             "INSERT INTO courses (title, description, professor_id, pdf_filename, extracted_text) VALUES (?, ?, ?, ?, ?)",
@@ -143,6 +178,8 @@ async def delete_course(course_id: int, user: dict = Depends(get_current_user)):
 async def list_materials(course_id: int, user: dict = Depends(get_current_user)):
     """List all uploaded materials for a course."""
     db = await get_db()
+    if user["role"] == "professor":
+        await _verify_course_ownership(db, course_id, user["id"])
     cursor = await db.execute(
         "SELECT * FROM course_materials WHERE course_id = ? ORDER BY created_at DESC",
         (course_id,),
@@ -168,21 +205,18 @@ async def upload_material(
     user: dict = Depends(get_current_user),
 ):
     """Upload a new material (PDF) to the course knowledge base."""
-    if user["role"] != "professor":
-        raise HTTPException(status_code=403, detail="Doar profesorii pot adăuga materiale")
+    _require_professor(user)
+
+    safe_name = _validate_upload(file)
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=400, detail=f"Fisierul este prea mare (max {MAX_UPLOAD_SIZE // (1024*1024)} MB)")
 
     db = await get_db()
+    await _verify_course_ownership(db, course_id, user["id"])
 
-    # Verify course belongs to professor
-    cursor = await db.execute("SELECT id FROM courses WHERE id = ? AND professor_id = ?", (course_id, user["id"]))
-    if not await cursor.fetchone():
-        await db.close()
-        raise HTTPException(status_code=404, detail="Cursul nu a fost găsit")
-
-    # Save file
-    filename = f"{user['id']}_{course_id}_{file.filename}"
+    filename = f"{user['id']}_{course_id}_{safe_name}"
     filepath = os.path.join(UPLOAD_DIR, filename)
-    content = await file.read()
     file_size = len(content)
     with open(filepath, "wb") as f:
         f.write(content)
@@ -222,10 +256,10 @@ async def upload_material(
 @router.delete("/{course_id}/materials/{material_id}")
 async def delete_material(course_id: int, material_id: int, user: dict = Depends(get_current_user)):
     """Remove a material from the course knowledge base."""
-    if user["role"] != "professor":
-        raise HTTPException(status_code=403, detail="Doar profesorii pot șterge materiale")
+    _require_professor(user)
 
     db = await get_db()
+    await _verify_course_ownership(db, course_id, user["id"])
 
     # Get filename to delete physical file
     cursor = await db.execute("SELECT filename FROM course_materials WHERE id = ? AND course_id = ?", (material_id, course_id))
@@ -250,6 +284,8 @@ async def delete_material(course_id: int, material_id: int, user: dict = Depends
 async def knowledge_stats(course_id: int, user: dict = Depends(get_current_user)):
     """Get stats about the course's knowledge base."""
     db = await get_db()
+    if user["role"] == "professor":
+        await _verify_course_ownership(db, course_id, user["id"])
     cursor = await db.execute("SELECT extracted_text FROM courses WHERE id = ?", (course_id,))
     course = await cursor.fetchone()
 
@@ -340,6 +376,13 @@ async def generate_questions(req: GenerateRequest, user: dict = Depends(get_curr
 @router.get("/{course_id}/questions", response_model=list[QuestionResponse])
 async def get_questions(course_id: int, difficulty: str | None = None, user: dict = Depends(get_current_user)):
     db = await get_db()
+    if user["role"] == "professor":
+        await _verify_course_ownership(db, course_id, user["id"])
+
+    # Validate difficulty parameter
+    if difficulty and difficulty not in ("easy", "medium", "hard"):
+        await db.close()
+        raise HTTPException(status_code=400, detail="Dificultate invalida (easy, medium, hard)")
 
     if difficulty:
         cursor = await db.execute(
@@ -395,10 +438,10 @@ async def create_question_manual(course_id: int, q: QuestionSchema, user: dict =
 @router.put("/{course_id}/questions/{question_id}", response_model=QuestionResponse)
 async def update_question(course_id: int, question_id: int, q: QuestionSchema, user: dict = Depends(get_current_user)):
     """Edit an existing question."""
-    if user["role"] != "professor":
-        raise HTTPException(status_code=403, detail="Doar profesorii pot edita întrebări")
+    _require_professor(user)
 
     db = await get_db()
+    await _verify_course_ownership(db, course_id, user["id"])
     cursor = await db.execute("SELECT id FROM questions WHERE id = ? AND course_id = ?", (question_id, course_id))
     if not await cursor.fetchone():
         await db.close()
@@ -420,10 +463,10 @@ async def update_question(course_id: int, question_id: int, q: QuestionSchema, u
 
 @router.delete("/{course_id}/questions/{question_id}")
 async def delete_question(course_id: int, question_id: int, user: dict = Depends(get_current_user)):
-    if user["role"] != "professor":
-        raise HTTPException(status_code=403, detail="Doar profesorii pot șterge întrebări")
+    _require_professor(user)
 
     db = await get_db()
+    await _verify_course_ownership(db, course_id, user["id"])
     await db.execute("DELETE FROM questions WHERE id = ? AND course_id = ?", (question_id, course_id))
     await db.commit()
     await db.close()
