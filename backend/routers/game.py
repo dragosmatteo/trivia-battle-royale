@@ -137,3 +137,77 @@ async def check_pin(pin_code: str, request: Request):
     if room.status != "waiting":
         raise HTTPException(status_code=400, detail="Sesiunea a inceput deja")
     return {"valid": True, "players_count": len(room.players)}
+
+
+@router.get("/my-history")
+async def get_my_history(user: dict = Depends(get_current_user)):
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT
+            gr.id,
+            gr.session_id,
+            gr.player_name,
+            gr.score,
+            gr.is_alive,
+            gr.eliminated_at_round,
+            gr.finished_at,
+            gs.pin_code,
+            gs.created_at,
+            c.title AS course_title
+        FROM game_results gr
+        JOIN game_sessions gs ON gs.id = gr.session_id
+        JOIN courses c ON c.id = gs.course_id
+        WHERE gr.player_name = ? OR gr.user_id = ?
+        ORDER BY gr.finished_at DESC
+        """,
+        (user["username"], user["id"]),
+    )
+    rows = await cursor.fetchall()
+    await db.close()
+
+    return [
+        {
+            "id": r["id"],
+            "session_id": r["session_id"],
+            "player_name": r["player_name"],
+            "score": r["score"],
+            "survived": bool(r["is_alive"]),
+            "eliminated_at_round": r["eliminated_at_round"],
+            "finished_at": r["finished_at"],
+            "pin_code": r["pin_code"],
+            "created_at": r["created_at"],
+            "course_title": r["course_title"],
+        }
+        for r in rows
+    ]
+
+
+@router.get("/my-stats")
+async def get_my_stats(user: dict = Depends(get_current_user)):
+    db = await get_db()
+    cursor = await db.execute(
+        """
+        SELECT
+            COUNT(*) AS total_games,
+            AVG(score) AS avg_score,
+            MAX(score) AS best_score,
+            SUM(is_alive) AS total_survived
+        FROM game_results
+        WHERE player_name = ? OR user_id = ?
+        """,
+        (user["username"], user["id"]),
+    )
+    row = await cursor.fetchone()
+    await db.close()
+
+    total_games = row["total_games"] or 0
+    total_survived = row["total_survived"] or 0
+
+    return {
+        "total_games": total_games,
+        "avg_score": round(row["avg_score"], 2) if row["avg_score"] is not None else 0,
+        "best_score": row["best_score"] or 0,
+        "total_correct": total_survived,
+        "win_rate": round((total_survived / total_games) * 100, 1) if total_games > 0 else 0,
+    }

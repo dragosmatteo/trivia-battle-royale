@@ -184,3 +184,22 @@ class PlayerState(BaseModel):
     score: int = 0
     is_alive: bool = True
     streak: int = 0
+
+
+# --- Password Schemas ---
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=6, max_length=128)
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        if not re.search(r'[a-zA-Z]', v):
+            raise ValueError("Parola nouă trebuie să conțină cel puțin o literă")
+        if not re.search(r'[0-9]', v):
+            raise ValueError("Parola nouă trebuie să conțină cel puțin o cifră")
+        return v
+
+
+class ResetPasswordRequest(BaseModel):
+    user_id: int

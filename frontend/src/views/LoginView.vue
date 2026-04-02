@@ -39,6 +39,43 @@
             Intră cu PIN
           </router-link>
         </div>
+
+        <div style="border-top: 1px solid var(--border); margin-top: 24px; padding-top: 16px;">
+          <button
+            @click="showChangePassword = !showChangePassword"
+            type="button"
+            style="background: none; border: none; cursor: pointer; color: var(--text-muted); font-size: 13px; width: 100%; text-align: center; padding: 4px 0;"
+          >
+            {{ showChangePassword ? '▲ Ascunde' : '▼ Schimbă parola' }}
+          </button>
+
+          <div v-if="showChangePassword" style="margin-top: 16px;">
+            <div v-if="cpError" style="padding: 10px 14px; background: rgba(255,71,87,0.15); border-radius: 8px; color: var(--danger); margin-bottom: 12px; font-size: 13px;">
+              {{ cpError }}
+            </div>
+            <div v-if="cpSuccess" style="padding: 10px 14px; background: rgba(46,213,115,0.15); border-radius: 8px; color: var(--success); margin-bottom: 12px; font-size: 13px;">
+              {{ cpSuccess }}
+            </div>
+
+            <form @submit.prevent="handleChangePassword">
+              <div class="form-group">
+                <label>Parolă curentă</label>
+                <input v-model="cpCurrent" type="password" class="form-input" placeholder="Parola curentă" required />
+              </div>
+              <div class="form-group">
+                <label>Parolă nouă</label>
+                <input v-model="cpNew" type="password" class="form-input" placeholder="Min. 6 caractere, literă + cifră" required />
+              </div>
+              <div class="form-group">
+                <label>Confirmare parolă nouă</label>
+                <input v-model="cpConfirm" type="password" class="form-input" placeholder="Repetați parola nouă" required />
+              </div>
+              <button type="submit" class="btn btn-primary" style="width: 100%;" :disabled="cpLoading">
+                {{ cpLoading ? 'Se salvează...' : 'Schimbă parola' }}
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -48,6 +85,7 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import axios from 'axios'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -67,6 +105,48 @@ async function handleLogin() {
     error.value = e.response?.data?.detail || 'Eroare la autentificare'
   } finally {
     loading.value = false
+  }
+}
+
+// Change password section
+const showChangePassword = ref(false)
+const cpCurrent = ref('')
+const cpNew = ref('')
+const cpConfirm = ref('')
+const cpError = ref('')
+const cpSuccess = ref('')
+const cpLoading = ref(false)
+
+async function handleChangePassword() {
+  cpError.value = ''
+  cpSuccess.value = ''
+
+  if (cpNew.value !== cpConfirm.value) {
+    cpError.value = 'Parolele noi nu coincid'
+    return
+  }
+
+  if (!authStore.token) {
+    cpError.value = 'Trebuie să fii autentificat pentru a schimba parola'
+    return
+  }
+
+  cpLoading.value = true
+  try {
+    await axios.put('/api/auth/change-password', {
+      current_password: cpCurrent.value,
+      new_password: cpNew.value,
+    }, {
+      headers: { Authorization: `Bearer ${authStore.token}` },
+    })
+    cpSuccess.value = 'Parola a fost schimbată cu succes!'
+    cpCurrent.value = ''
+    cpNew.value = ''
+    cpConfirm.value = ''
+  } catch (e) {
+    cpError.value = e.response?.data?.detail || 'Eroare la schimbarea parolei'
+  } finally {
+    cpLoading.value = false
   }
 }
 </script>

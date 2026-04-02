@@ -20,6 +20,10 @@ ANSWER_GRACE_PERIOD = 2.5
 # Minimum players required for league split
 MIN_PLAYERS_FOR_LEAGUES = 4
 
+# Minimum average score (per question) to qualify for champions league
+# e.g., 4 means at least 40% of max possible points per question
+MIN_SCORE_FOR_CHAMPIONS = 4
+
 # Seconds to show results before loading next question
 RESULTS_DISPLAY_TIME = 6
 LOADING_DISPLAY_TIME = 2
@@ -404,12 +408,23 @@ class GameManager:
         leagues = {"champions": [], "challengers": []}
 
         if total_players >= MIN_PLAYERS_FOR_LEAGUES:
-            # Sort by score descending
-            sorted_players = sorted(room.players.values(), key=lambda p: -p.score)
+            total_rounds = room.current_question_index + 1
+            min_total_score = MIN_SCORE_FOR_CHAMPIONS * total_rounds
+
+            # Sort by score desc, accuracy desc, speed asc (same as leaderboard)
+            sorted_players = sorted(
+                room.players.values(),
+                key=lambda p: (
+                    -p.score,
+                    -(p.correct_count / max(p.total_answered, 1)),
+                    p.answer_time if p.answer_time is not None else 999,
+                ),
+            )
             mid = total_players // 2
 
             for i, player in enumerate(sorted_players):
-                if i < mid:
+                # Top half AND meets minimum score -> champions
+                if i < mid and player.score >= min_total_score:
                     player.league = "champions"
                     leagues["champions"].append(player.nickname)
                 else:
@@ -505,9 +520,14 @@ class GameManager:
             print(f"Error saving game results: {e}")
 
     def _get_leaderboard(self, room: GameRoom) -> list[dict]:
+        # Tiebreaker: score desc, then accuracy desc, then avg answer time asc
         players = sorted(
             room.players.values(),
-            key=lambda p: -p.score,
+            key=lambda p: (
+                -p.score,
+                -(p.correct_count / max(p.total_answered, 1)),
+                p.answer_time if p.answer_time is not None else 999,
+            ),
         )
         return [
             {

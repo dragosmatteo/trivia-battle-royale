@@ -7,6 +7,10 @@
       </div>
 
       <div class="card">
+        <div v-if="inviteGroup" style="padding: 10px 14px; background: rgba(46,213,115,0.15); border-radius: 8px; color: var(--success, #2ed573); margin-bottom: 16px; font-size: 14px; text-align: center;">
+          Te inscrii in clasa <strong>{{ inviteGroup }}</strong>
+        </div>
+
         <div v-if="error" style="padding: 10px 14px; background: rgba(255,71,87,0.15); border-radius: 8px; color: var(--danger); margin-bottom: 16px; font-size: 13px;">
           {{ error }}
         </div>
@@ -28,7 +32,7 @@
             <label>Parolă</label>
             <input v-model="form.password" type="password" class="form-input" placeholder="Minim 4 caractere" required />
           </div>
-          <div class="form-group">
+          <div class="form-group" v-if="!inviteGroup">
             <label>Rol</label>
             <select v-model="form.role" class="form-select" required>
               <option value="student">Student</option>
@@ -37,7 +41,7 @@
           </div>
           <div class="form-group" v-if="form.role === 'student'">
             <label>Grupa</label>
-            <input v-model="form.group_name" class="form-input" placeholder="ex: 1401A" />
+            <input v-model="form.group_name" class="form-input" placeholder="ex: 1401A" :readonly="!!inviteGroup" :style="inviteGroup ? 'background: var(--bg-secondary, #f0f0f0); cursor: not-allowed;' : ''" />
           </div>
           <button type="submit" class="btn btn-primary btn-lg" style="width: 100%;" :disabled="loading">
             {{ loading ? 'Se creează contul...' : 'Înregistrare' }}
@@ -54,12 +58,16 @@
 </template>
 
 <script setup>
-import { ref, reactive } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, reactive, computed } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
+
+const inviteCode = computed(() => route.query.class || '')
+const inviteGroup = computed(() => route.query.group || '')
 
 const form = reactive({
   full_name: '',
@@ -67,8 +75,15 @@ const form = reactive({
   email: '',
   password: '',
   role: 'student',
-  group_name: '',
+  group_name: inviteGroup.value || '',
 })
+
+// Lock role to student when arriving via invite link
+if (inviteGroup.value) {
+  form.role = 'student'
+  form.group_name = inviteGroup.value
+}
+
 const error = ref('')
 const loading = ref(false)
 

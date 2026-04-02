@@ -9,3 +9,5 @@ openai
 python-dotenv
 aiosqlite
 websockets
+python-docx
+python-pptx

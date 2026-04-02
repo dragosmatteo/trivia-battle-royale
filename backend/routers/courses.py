@@ -6,7 +6,7 @@ from typing import Optional
 from models.database import get_db
 from models.schemas import CourseResponse, GenerateRequest, QuestionResponse, QuestionSchema, MaterialResponse
 from routers.auth import get_current_user
-from services.pdf_processor import extract_text_from_pdf
+from services.pdf_processor import extract_text_from_file
 from services.ai_generator import generate_questions_ai
 from config import UPLOAD_DIR
 
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/api/courses", tags=["Courses"])
 
 # --- Security constants ---
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
-ALLOWED_EXTENSIONS = {".pdf"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx"}
 
 
 def _require_professor(user: dict):
@@ -59,7 +59,7 @@ async def create_course(
     extracted = ""
     filename = None
 
-    # If PDF provided, validate and save
+    # If file provided, validate and save
     if pdf and pdf.filename:
         safe_name = _validate_upload(pdf)
         content = await pdf.read()
@@ -71,7 +71,7 @@ async def create_course(
         with open(filepath, "wb") as f:
             f.write(content)
 
-        extracted = extract_text_from_pdf(filepath)
+        extracted = extract_text_from_file(filepath)
 
         db = await get_db()
         cursor = await db.execute(
@@ -84,7 +84,7 @@ async def create_course(
         # Save as material
         char_count = len(extracted)
         status = "ready" if char_count > 50 else "error"
-        error_msg = "" if char_count > 50 else "Nu s-a putut extrage suficient text din PDF"
+        error_msg = "" if char_count > 50 else "Nu s-a putut extrage suficient text din fisier"
         await db.execute(
             "INSERT INTO course_materials (course_id, filename, original_name, file_size, extracted_text, char_count, status, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (course_id, filename, pdf.filename, len(content), extracted, char_count, status, error_msg),
@@ -204,7 +204,7 @@ async def upload_material(
     file: UploadFile = File(...),
     user: dict = Depends(get_current_user),
 ):
-    """Upload a new material (PDF) to the course knowledge base."""
+    """Upload a new material (PDF, DOCX, or PPTX) to the course knowledge base."""
     _require_professor(user)
 
     safe_name = _validate_upload(file)
@@ -227,7 +227,7 @@ async def upload_material(
 
     if char_count < 50:
         status = "error"
-        error_msg = "Nu s-a putut extrage suficient text. Verificați dacă PDF-ul conține text selectabil."
+        error_msg = "Nu s-a putut extrage suficient text. Verificați dacă fisierul conține text selectabil."
     else:
         status = "ready"
         error_msg = ""

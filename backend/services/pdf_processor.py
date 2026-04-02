@@ -1,8 +1,9 @@
 """
-PDF text extraction with Romanian diacritics repair.
+PDF, Word (.docx), and PowerPoint (.pptx) text extraction with Romanian diacritics repair.
 Handles LaTeX-generated PDFs where diacritics appear as combining characters.
 """
 
+import os
 import re
 
 # Try pdfplumber first (better extraction), fall back to PyPDF2
@@ -163,6 +164,48 @@ def _clean_text(text: str) -> str:
         cleaned_lines.append(stripped)
 
     return "\n".join(cleaned_lines)
+
+
+def extract_text_from_docx(file_path: str) -> str:
+    """Extract text from a Word (.docx) file using python-docx."""
+    try:
+        from docx import Document
+        doc = Document(file_path)
+        paragraphs = [para.text for para in doc.paragraphs if para.text.strip()]
+        return "\n".join(paragraphs)
+    except Exception:
+        return ""
+
+
+def extract_text_from_pptx(file_path: str) -> str:
+    """Extract text from a PowerPoint (.pptx) file using python-pptx."""
+    try:
+        from pptx import Presentation
+        prs = Presentation(file_path)
+        lines = []
+        for slide in prs.slides:
+            for shape in slide.shapes:
+                if shape.has_text_frame:
+                    for para in shape.text_frame.paragraphs:
+                        text = para.text.strip()
+                        if text:
+                            lines.append(text)
+        return "\n".join(lines)
+    except Exception:
+        return ""
+
+
+def extract_text_from_file(file_path: str) -> str:
+    """Detect file extension and extract text using the appropriate extractor."""
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".pdf":
+        return extract_text_from_pdf(file_path)
+    elif ext == ".docx":
+        return extract_text_from_docx(file_path)
+    elif ext == ".pptx":
+        return extract_text_from_pptx(file_path)
+    else:
+        return ""
 
 
 def chunk_text(text: str, chunk_size: int = 2000, overlap: int = 200) -> list[str]:

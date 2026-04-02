@@ -1,12 +1,14 @@
 from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import hmac
+import secrets
+import string
 from fastapi import APIRouter, HTTPException, Depends
 from jose import JWTError, jwt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from models.database import get_db
-from models.schemas import UserCreate, UserLogin, Token, UserResponse
+from models.schemas import UserCreate, UserLogin, Token, UserResponse, ChangePasswordRequest, ResetPasswordRequest
 from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
@@ -110,3 +112,54 @@ async def get_me(user: dict = Depends(get_current_user)):
         id=user["id"], username=user["username"], email=user["email"],
         full_name=user["full_name"], role=user["role"], group_name=user["group_name"],
     )
+
+
+@router.put("/change-password")
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if not verify_password(data.current_password, current_user["hashed_password"]):
+        raise HTTPException(status_code=400, detail="Parola curentă este incorectă")
+
+    new_hashed = hash_password(data.new_password)
+    db = await get_db()
+    await db.execute(
+        "UPDATE users SET hashed_password = ? WHERE id = ?",
+        (new_hashed, current_user["id"]),
+    )
+    await db.commit()
+    await db.close()
+    return {"message": "Parola a fost schimbată cu succes"}
+
+
+@router.post("/reset-password")
+async def reset_password(
+    data: ResetPasswordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] != "professor":
+        raise HTTPException(status_code=403, detail="Acces interzis")
+
+    db = await get_db()
+    cursor = await db.execute(
+        "SELECT id, role FROM users WHERE id = ?", (data.user_id,)
+    )
+    target = await cursor.fetchone()
+    if not target:
+        raise HTTPException(status_code=404, detail="Utilizatorul nu a fost găsit")
+    if target["role"] != "student":
+        await db.close()
+        raise HTTPException(status_code=400, detail="Resetarea parolei este permisă doar pentru studenți")
+
+    alphabet = string.ascii_letters + string.digits
+    generated_password = ''.join(secrets.choice(alphabet) for _ in range(8))
+    new_hashed = hash_password(generated_password)
+
+    await db.execute(
+        "UPDATE users SET hashed_password = ? WHERE id = ?",
+        (new_hashed, data.user_id),
+    )
+    await db.commit()
+    await db.close()
+    return {"message": "Parola a fost resetată cu succes", "generated_password": generated_password}
